@@ -117,7 +117,7 @@ All errors implement `std::error::Error` via `thiserror`.
 ## 🧩 Example Response
 
 ```json
-{ "status": "success", "request_id": "abc123" }
+{ "status": "success" }
 ```
 
 ---
