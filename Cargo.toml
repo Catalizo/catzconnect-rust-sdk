@@ -1,0 +1,33 @@
+[package]
+name = "catzconnect"
+version = "1.0.0"
+edition = "2021"
+description = "Secure, minimal SDK for sending encrypted communication requests to the CatzConnect API"
+license = "ISC"
+authors = ["catalizo"]
+
+[lib]
+name = "catzconnect"
+path = "src/lib.rs"
+
+[dependencies]
+tokio            = { version = "1",    features = ["full"] }
+hyper            = { version = "0.14", features = ["client", "http1"] }
+hyper-tls        = "0.5"
+
+# preserve_order → uses IndexMap so JSON key order matches JavaScript's insertion order
+serde            = { version = "1",    features = ["derive"] }
+serde_json       = { version = "1",    features = ["preserve_order"] }
+indexmap         = "=2.2.6"   # pin — newer versions require rustc ≥ 1.86
+
+base64           = "0.21"
+dotenvy          = "0.15"
+
+x25519-dalek     = { version = "2",    features = ["static_secrets"] }
+blake2           = "0.10"
+chacha20poly1305 = "0.10"
+rand             = "0.8"
+
+thiserror        = "1"
+regex            = "1"
+once_cell        = "1"
