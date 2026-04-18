@@ -35,7 +35,6 @@ Create a `.env` file (or export these variables):
 API_KEY=your_api_key
 PRIVATE_KEY=your_base64_private_key
 SERVER_PUBLIC_KEY=server_base64_public_key
-# BASE_URL=https://api.catzconnect.com  # optional
 ```
 
 > ⚠️ Never expose these values in public environments.
