@@ -39,3 +39,10 @@ pub(crate) struct EncryptedBody {
 pub struct ApiResponse {
     pub status: String,
 }
+
+#[derive(Debug, Clone)]
+pub struct EnvValues {
+    pub api_key: String,
+    pub private_key: String,
+    pub server_public_key: String,
+}

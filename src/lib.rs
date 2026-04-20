@@ -8,7 +8,7 @@
 //! ```toml
 //! # Cargo.toml
 //! [dependencies]
-//! catzconnect = "1.0.0"
+//! catzconnect = "1.0.2"
 //! tokio   = { version = "1", features = ["full"] }
 //! dotenvy = "0.15"
 //! ```
@@ -28,7 +28,7 @@
 //!             to:  Some("user@example.com".into()),
 //!             otp: Some("123456".into()),
 //!         },
-//!     })
+//!     }, None)
 //!     .await?;
 //!
 //!     println!("{resp}");
@@ -46,7 +46,7 @@ use serde_json::json;
 
 use core::{crypto, http::HttpClient, payload::verify_payload};
 pub use error::CatzError;
-use types::SendInput;
+use types::{SendInput, EnvValues};
 
 pub struct CatzConnect;
 
@@ -63,7 +63,7 @@ impl CatzConnect {
     ///
     /// Returns [`CatzError`] on validation failure, encryption failure, or a
     /// non-2xx HTTP response from the API.
-    pub async fn send(input: SendInput) -> Result<serde_json::Value, CatzError> {
+    pub async fn send(input: SendInput, env: Option<EnvValues>) -> Result<serde_json::Value, CatzError> {
         // 1. Validate
         verify_payload(&input)?;
 
@@ -79,10 +79,10 @@ impl CatzConnect {
         });
 
         // 3. Encrypt
-        let encrypted = crypto::encrypt(&final_payload)?;
+        let encrypted = crypto::encrypt(&final_payload, env.clone())?;
 
         // 4. Send
-        let client = HttpClient::from_env()?;
+        let client = HttpClient::from_env(env)?;
         let response = client.post("/sdk/send", &encrypted).await?;
 
         Ok(response)

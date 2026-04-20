@@ -17,7 +17,7 @@ use rand::RngCore;
 use serde_json::{json, Value};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::{error::CatzError, types::EncryptedBody};
+use crate::{error::CatzError, types::EncryptedBody, types::EnvValues};
 
 fn lenient_engine() -> GeneralPurpose {
     GeneralPurpose::new(&alphabet::STANDARD, engine::general_purpose::PAD)
@@ -60,11 +60,19 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-pub fn encrypt(payload: &Value) -> Result<EncryptedBody, CatzError> {
-    let priv_b64 =
-        std::env::var("PRIVATE_KEY").map_err(|_| CatzError::MissingEnv("PRIVATE_KEY".into()))?;
-    let pub_b64 = std::env::var("SERVER_PUBLIC_KEY")
-        .map_err(|_| CatzError::MissingEnv("SERVER_PUBLIC_KEY".into()))?;
+pub fn encrypt(payload: &Value, env: Option<EnvValues>) -> Result<EncryptedBody, CatzError> {
+    let priv_b64 = match &env {
+        Some(e) => e.private_key.clone(),
+        None => {
+            std::env::var("PRIVATE_KEY").map_err(|_| CatzError::MissingEnv("PRIVATE_KEY".into()))?
+        }
+    };
+
+    let pub_b64 = match &env {
+        Some(e) => e.server_public_key.clone(),
+        None => std::env::var("SERVER_PUBLIC_KEY")
+            .map_err(|_| CatzError::MissingEnv("SERVER_PUBLIC_KEY".into()))?,
+    };
 
     let priv_bytes = b64_decode(&priv_b64)?;
     let pub_bytes = b64_decode(&pub_b64)?;

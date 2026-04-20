@@ -2,7 +2,7 @@ use hyper::{body::to_bytes, client::HttpConnector, Body, Client, Request};
 use hyper_tls::HttpsConnector;
 use serde_json::Value;
 
-use crate::{error::CatzError, types::EncryptedBody};
+use crate::{error::CatzError, types::EncryptedBody, types::EnvValues};
 
 type HttpsClient = Client<HttpsConnector<HttpConnector>>;
 
@@ -13,9 +13,12 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
-    pub fn from_env() -> Result<Self, CatzError> {
-        let raw_key = std::env::var("API_KEY")
-            .map_err(|_| CatzError::MissingEnv("API_KEY".into()))?;
+    pub fn from_env(env: Option<EnvValues>) -> Result<Self, CatzError> {
+        let raw_key = match &env {
+            Some(e) => e.api_key.clone(),
+            None => std::env::var("API_KEY")
+                .map_err(|_| CatzError::MissingEnv("API_KEY".into()))?,
+        };
 
         let api_key = raw_key.trim().to_string();
         if api_key.is_empty() {

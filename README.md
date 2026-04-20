@@ -20,7 +20,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-catzconnect = "1.0.0"
+catzconnect = "1.0.2"
 tokio   = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             to:  Some("user@example.com".into()),
             otp: Some("123456".into()),
         },
-    })
+    }, None)
     .await?;
 
     println!("{response}");
