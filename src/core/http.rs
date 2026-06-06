@@ -16,7 +16,7 @@ impl HttpClient {
     pub fn from_env(env: Option<EnvValues>) -> Result<Self, CatzError> {
         let raw_key = match &env {
             Some(e) => e.api_key.clone(),
-            None => std::env::var("API_KEY")
+            None => std::env::var("CATZCONNECT_API_KEY")
                 .map_err(|_| CatzError::MissingEnv("API_KEY".into()))?,
         };
 
@@ -25,7 +25,7 @@ impl HttpClient {
             return Err(CatzError::MissingEnv("API_KEY is empty".into()));
         }
 
-        let base_url = std::env::var("BASE_URL")
+        let base_url = std::env::var("CATZCONNECT_BASE_URL")
             .map(|s| s.trim().trim_end_matches('/').to_string())
             .unwrap_or_else(|_| "https://api.catzconnect.com".into());
 

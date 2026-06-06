@@ -64,13 +64,13 @@ pub fn encrypt(payload: &Value, env: Option<EnvValues>) -> Result<EncryptedBody,
     let priv_b64 = match &env {
         Some(e) => e.private_key.clone(),
         None => {
-            std::env::var("PRIVATE_KEY").map_err(|_| CatzError::MissingEnv("PRIVATE_KEY".into()))?
+            std::env::var("CATZCONNECT_PRIVATE_KEY").map_err(|_| CatzError::MissingEnv("PRIVATE_KEY".into()))?
         }
     };
 
     let pub_b64 = match &env {
         Some(e) => e.server_public_key.clone(),
-        None => std::env::var("SERVER_PUBLIC_KEY")
+        None => std::env::var("CATZCONNECT_SERVER_PUBLIC_KEY")
             .map_err(|_| CatzError::MissingEnv("SERVER_PUBLIC_KEY".into()))?,
     };
 

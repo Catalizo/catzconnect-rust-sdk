@@ -20,7 +20,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-catzconnect = "1.0.2"
+catzconnect = "1.0.3"
 tokio   = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -32,9 +32,9 @@ dotenvy = "0.15"
 Create a `.env` file (or export these variables):
 
 ```env
-API_KEY=your_api_key
-PRIVATE_KEY=your_base64_private_key
-SERVER_PUBLIC_KEY=server_base64_public_key
+CATZCONNECT_API_KEY=your_api_key
+CATZCONNECT_PRIVATE_KEY=your_base64_private_key
+CATZCONNECT_SERVER_PUBLIC_KEY=server_base64_public_key
 ```
 
 > ⚠️ Never expose these values in public environments.
@@ -57,6 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         message_type: MessageType::Verification,
         channel:      Channel::Email,
         template:     Template::Otp,
+        identity:     "user@domain.com",
         payload: SendPayload {
             to:  Some("user@example.com".into()),
             otp: Some("123456".into()),
@@ -80,9 +81,26 @@ SendInput {
     message_type: MessageType::Verification,
     channel:      Channel::Email,
     template:     Template::Otp,
+    identity:     "user@domain.com",
     payload: SendPayload {
         to:  Some("user@example.com".into()), // required, valid email
         otp: Some("123456".into()),                    // required
+    },
+}
+```
+
+### Email Transactional
+
+```rust
+SendInput {
+    message_type: MessageType::Verification,
+    channel:      Channel::Transactional,
+    template:     Template::Custom,
+    identity:     "user@domain.com",
+    payload: SendPayload {
+        to:  Some("user@example.com".into()), // required, valid email
+        subject: Some("hello world".into()),               // required
+        body: Some("welcome to catzconnect".into()),       // required
     },
 }
 ```

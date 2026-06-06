@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageType {
     Verification,
+    Transactional
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,6 +14,7 @@ pub enum Channel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Template {
     Otp,
+    Custom
 }
 
 #[derive(Debug, Clone)]
@@ -20,6 +22,7 @@ pub struct SendInput {
     pub message_type: MessageType,
     pub channel: Channel,
     pub template: Template,
+    pub identity: String,
     pub payload: SendPayload,
 }
 
@@ -27,6 +30,8 @@ pub struct SendInput {
 pub struct SendPayload {
     pub to: Option<String>,
     pub otp: Option<String>,
+    pub subject: Option<String>,
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

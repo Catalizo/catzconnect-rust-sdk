@@ -1,6 +1,6 @@
 [package]
 name = "catzconnect"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 description = "Secure, minimal SDK for sending encrypted communication requests to the CatzConnect API"
 license = "ISC"
