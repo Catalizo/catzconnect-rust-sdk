@@ -28,8 +28,7 @@
 //!         payload: SendPayload {
 //!             to:  Some("user@example.com".into()),
 //!             otp: Some("123456".into()),
-//!             subject: None,
-//!             body: None,
+//!             ..Default::default()
 //!         },
 //!     }, None)
 //!     .await?;
@@ -53,9 +52,9 @@
 //!         identity:     "user@domain.com".to_string(),
 //!         payload: SendPayload {
 //!             to:  Some("user@example.com".into()),
-//!             otp: None,
 //!             subject: Some("hello world".into()),
 //!             body: Some("welcome to catzconnect".into()),
+//!             ..Default::default()
 //!         },
 //!     }, None)
 //!     .await?;
@@ -68,7 +67,7 @@
 pub mod error;
 pub mod types;
 
-mod core;
+pub(crate) mod core;
 mod utils;
 
 use serde_json::json;
@@ -129,6 +128,39 @@ impl CatzConnect {
                 "body":         input.payload.body,
             }),
 
+            (Channel::WhatsApp, MessageType::Verification, Template::Otp) => json!({
+                "message_type": format!("{:?}", input.message_type),
+                "channel":      format!("{:?}", input.channel),
+                "template":     format!("{:?}", input.template),
+                "identity":     input.identity,
+                "to":           input.payload.to,
+                "otp":          input.payload.otp,
+            }),
+
+            (Channel::WhatsApp, MessageType::Transactional, Template::Custom) => json!({
+                "message_type": format!("{:?}", input.message_type),
+                "channel":      format!("{:?}", input.channel),
+                "template":     format!("{:?}", input.template),
+                "identity":     input.identity,
+                "to":           input.payload.to,
+                "subject":      input.payload.subject,
+                "body":         input.payload.body,
+            }),
+
+            (Channel::Push, MessageType::Notification, Template::Notification) => json!({
+                "message_type": format!("{:?}", input.message_type),
+                "channel":      format!("{:?}", input.channel),
+                "template":     format!("{:?}", input.template),
+                "identity":     input.identity,
+                "to":           input.payload.to,
+                "title":        input.payload.title,
+                "body":         input.payload.body,
+                "data":         input.payload.data,
+                "image":        input.payload.image,
+                "link":         input.payload.link,
+                "device_key":   input.payload.device_key,
+            }),
+
             _ => {
                 return Err(CatzError::Validation(
                     "Unsupported channel/message_type/template combination".into(),
@@ -144,5 +176,73 @@ impl CatzConnect {
         let response = client.post("/sdk/send", &encrypted).await?;
 
         Ok(response)
+    }
+}
+/// Cross-language interop with the Go SDK. Runs only with CATZ_INTEROP_DIR set:
+/// writes a Rust-encrypted fixture for Go to open, and opens Go's if present.
+#[cfg(test)]
+mod interop {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use blake2::{digest::{Update, VariableOutput}, Blake2bVar};
+    use chacha20poly1305::{aead::{Aead, KeyInit}, ChaCha20Poly1305, Nonce};
+    use serde_json::{json, Value};
+    use x25519_dalek::{PublicKey, StaticSecret};
+
+    fn b2(d: &[u8]) -> [u8; 32] {
+        let mut h = Blake2bVar::new(32).unwrap();
+        h.update(d);
+        let mut o = [0u8; 32];
+        h.finalize_variable(&mut o).unwrap();
+        o
+    }
+
+    /// The server's side: server private key + client public key.
+    fn server_decrypt(server_priv: &[u8], client_pub: &[u8], nonce: &str, ct: &str) -> Value {
+        let s = StaticSecret::from(<[u8; 32]>::try_from(server_priv).unwrap());
+        let c = PublicKey::from(<[u8; 32]>::try_from(client_pub).unwrap());
+        let master = b2(s.diffie_hellman(&c).as_bytes());
+        let key = b2(&[&master[..], b"CONNECT-@-2026-HS-@-CATZ"].concat());
+        let n = STANDARD.decode(nonce).unwrap();
+        let plain = ChaCha20Poly1305::new_from_slice(&key).unwrap()
+            .decrypt(Nonce::from_slice(&n), STANDARD.decode(ct).unwrap().as_ref())
+            .expect("Rust could not decrypt Go's ciphertext");
+        serde_json::from_slice(&plain).unwrap()
+    }
+
+    #[test]
+    fn go_and_rust_interoperate() {
+        let Ok(dir) = std::env::var("CATZ_INTEROP_DIR") else { return };
+
+        // Rust → Go: encrypt with fixed keys, publish for the Go test.
+        let client = StaticSecret::from([7u8; 32]);
+        let server = StaticSecret::from([9u8; 32]);
+        let env = crate::types::EnvValues {
+            api_key: "k".into(),
+            private_key: STANDARD.encode(client.to_bytes()),
+            server_public_key: STANDARD.encode(PublicKey::from(&server).as_bytes()),
+        };
+        let payload = json!({"message_type":"Notification","channel":"Push","template":"Notification",
+            "identity":"proj","to":"tok","body":"from rust","device_key":"DK","data":{"order":"42"}});
+        let enc = crate::core::crypto::encrypt(&payload, Some(env)).unwrap();
+        std::fs::write(format!("{dir}/rust_enc.json"), json!({
+            "server_priv": STANDARD.encode(server.to_bytes()),
+            "client_pub": STANDARD.encode(PublicKey::from(&client).as_bytes()),
+            "nonce": enc.nonce, "ciphertext": enc.ciphertext,
+        }).to_string()).unwrap();
+
+        // Go → Rust: open what the Go SDK wrote, if it has run.
+        if let Ok(raw) = std::fs::read_to_string(format!("{dir}/go_enc.json")) {
+            let f: Value = serde_json::from_str(&raw).unwrap();
+            let got = server_decrypt(
+                &STANDARD.decode(f["server_priv"].as_str().unwrap()).unwrap(),
+                &STANDARD.decode(f["client_pub"].as_str().unwrap()).unwrap(),
+                f["nonce"].as_str().unwrap(), f["ciphertext"].as_str().unwrap(),
+            );
+            assert_eq!(got["body"], "from go");
+            assert_eq!(got["device_key"], "DK");
+            assert_eq!(got["data"]["order"], "42");
+            assert!(got["ts"].is_number());
+            println!("GO -> RUST: decrypted {}", got);
+        }
     }
 }

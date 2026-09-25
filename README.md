@@ -147,3 +147,51 @@ cargo build
 cargo test
 cargo clippy
 ```
+
+## Building a payload
+
+Use `..Default::default()` so fields added in later versions don't break your code:
+
+```rust
+SendPayload { to: Some(to), otp: Some(otp), ..Default::default() }
+```
+
+## WhatsApp
+
+```rust
+CatzConnect::send(SendInput {
+    message_type: MessageType::Verification,
+    channel:      Channel::WhatsApp,
+    template:     Template::Otp,
+    identity:     "919578456444".into(),          // your connected WhatsApp number
+    payload: SendPayload {
+        to:  Some("+91 98765 43210".into()),       // phone number with country code
+        otp: Some("123456".into()),
+        ..Default::default()
+    },
+}, None).await?;
+```
+
+`Transactional` / `Custom` takes `to`, `body`, and an optional `subject` sent as a bold
+first line. OTPs need an approved Authentication template; custom messages only
+reach people who messaged your number in the last 24 hours.
+
+## Push notifications (end-to-end encrypted)
+
+```rust
+CatzConnect::send(SendInput {
+    message_type: MessageType::Notification,
+    channel:      Channel::Push,
+    template:     Template::Notification,
+    identity:     "your-firebase-project-id".into(),
+    payload: SendPayload {
+        to:         Some(fcm_token),
+        device_key: Some(device_public_key),       // seals the content to that device
+        title:      Some("Order shipped".into()),
+        body:       Some("Arriving Friday".into()),
+        ..Default::default()
+    },
+}, None).await?;
+```
+
+The device generates its keys and decrypts — see `PUSH.md`.
