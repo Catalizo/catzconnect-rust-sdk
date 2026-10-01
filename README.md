@@ -195,3 +195,34 @@ CatzConnect::send(SendInput {
 ```
 
 The device generates its keys and decrypts — see `PUSH.md`.
+
+## Email templates from the panel
+
+```rust
+let resp = CatzConnect::send(SendInput {
+    message_type: MessageType::Transactional,
+    channel:      Channel::Email,
+    template:     Template::Named("Order shipped".into()), // the template's name in the panel
+    identity:     "noreply@yourdomain.com".into(),
+    payload: SendPayload {
+        to:   Some("user@example.com".into()),
+        data: Some([("name".to_string(), "Ann".to_string())].into()),
+        ..Default::default()
+    },
+}, None).await?;
+```
+
+## Push to a user's registered devices
+
+Set `external_user_id: Some("user-42".into())` instead of `to` to send to every
+device your app registered for that user with `POST /push/register`.
+`device_key` must be `None`; each device's registered key is used.
+
+## Verifying webhooks
+
+```rust
+let ok = catzconnect::webhook::verify_signature(&raw_body, signature_header, &secret);
+```
+
+`verify_signature_at(body, header, secret, now_unix, tolerance_secs)` takes an
+explicit clock. SHA-256 and HMAC are built in; no extra dependency.

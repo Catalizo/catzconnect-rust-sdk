@@ -8,7 +8,7 @@
 //! ```toml
 //! # Cargo.toml
 //! [dependencies]
-//! catzconnect = "1.0.3"
+//! catzconnect = "1.2"
 //! tokio   = { version = "1", features = ["full"] }
 //! dotenvy = "0.15"
 //! ```
@@ -66,6 +66,10 @@
 
 pub mod error;
 pub mod types;
+pub mod webhook;
+
+/// Server-side: the `user_hash` for `POST /push/register` (see [`webhook::compute_user_hash`]).
+pub use webhook::compute_user_hash;
 
 pub(crate) mod core;
 mod utils;
@@ -112,7 +116,7 @@ impl CatzConnect {
             (Channel::Email, MessageType::Verification, Template::Otp) => json!({
                 "message_type": format!("{:?}", input.message_type),
                 "channel":      format!("{:?}", input.channel),
-                "template":     format!("{:?}", input.template),
+                "template":     input.template.name(),
                 "identity":     input.identity,
                 "to":           input.payload.to,
                 "otp":          input.payload.otp,
@@ -121,7 +125,7 @@ impl CatzConnect {
             (Channel::Email, MessageType::Transactional, Template::Custom) => json!({
                 "message_type": format!("{:?}", input.message_type),
                 "channel":      format!("{:?}", input.channel),
-                "template":     format!("{:?}", input.template),
+                "template":     input.template.name(),
                 "identity":     input.identity,
                 "to":           input.payload.to,
                 "subject":      input.payload.subject,
@@ -131,7 +135,7 @@ impl CatzConnect {
             (Channel::WhatsApp, MessageType::Verification, Template::Otp) => json!({
                 "message_type": format!("{:?}", input.message_type),
                 "channel":      format!("{:?}", input.channel),
-                "template":     format!("{:?}", input.template),
+                "template":     input.template.name(),
                 "identity":     input.identity,
                 "to":           input.payload.to,
                 "otp":          input.payload.otp,
@@ -140,7 +144,7 @@ impl CatzConnect {
             (Channel::WhatsApp, MessageType::Transactional, Template::Custom) => json!({
                 "message_type": format!("{:?}", input.message_type),
                 "channel":      format!("{:?}", input.channel),
-                "template":     format!("{:?}", input.template),
+                "template":     input.template.name(),
                 "identity":     input.identity,
                 "to":           input.payload.to,
                 "subject":      input.payload.subject,
@@ -150,7 +154,7 @@ impl CatzConnect {
             (Channel::Push, MessageType::Notification, Template::Notification) => json!({
                 "message_type": format!("{:?}", input.message_type),
                 "channel":      format!("{:?}", input.channel),
-                "template":     format!("{:?}", input.template),
+                "template":     input.template.name(),
                 "identity":     input.identity,
                 "to":           input.payload.to,
                 "title":        input.payload.title,
@@ -159,6 +163,16 @@ impl CatzConnect {
                 "image":        input.payload.image,
                 "link":         input.payload.link,
                 "device_key":   input.payload.device_key,
+                "external_user_id": input.payload.external_user_id,
+            }),
+
+            (Channel::Email, _, Template::Named(_)) => json!({
+                "message_type": format!("{:?}", input.message_type),
+                "channel":      format!("{:?}", input.channel),
+                "template":     input.template.name(),
+                "identity":     input.identity,
+                "to":           input.payload.to,
+                "data":         input.payload.data,
             }),
 
             _ => {

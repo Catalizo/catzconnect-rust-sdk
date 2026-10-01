@@ -19,6 +19,21 @@ pub enum Template {
     Otp,
     Custom,
     Notification,
+    /// An email template created in the panel (Email → Templates), sent by
+    /// name. Its `{{variables}}` are filled from `payload.data`.
+    Named(String),
+}
+
+impl Template {
+    /// The name sent to the API.
+    pub fn name(&self) -> &str {
+        match self {
+            Template::Otp => "Otp",
+            Template::Custom => "Custom",
+            Template::Notification => "Notification",
+            Template::Named(n) => n,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +63,8 @@ pub struct SendPayload {
 
     // ── Push only ──
     pub title: Option<String>,
-    /// Delivered to the app. FCM carries string values only.
+    /// Push: delivered to the app (string values only). Email with
+    /// `Template::Named`: the values for the template's `{{variables}}`.
     pub data: Option<std::collections::HashMap<String, String>>,
     /// https URL.
     pub image: Option<String>,
@@ -57,6 +73,11 @@ pub struct SendPayload {
     /// The device's X25519 public key, base64. Seals the content so only that
     /// device can read it.
     pub device_key: Option<String>,
+    /// Push: send to every device your app registered for this user (with
+    /// `POST /push/register`) instead of one token in `to`. Give one of `to`
+    /// or `external_user_id`; `device_key` is not allowed with it, because
+    /// each registered device's own key is used.
+    pub external_user_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
