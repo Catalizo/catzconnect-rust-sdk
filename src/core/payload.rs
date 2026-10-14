@@ -115,6 +115,8 @@ pub fn verify_payload(input: &SendInput) -> Result<(), CatzError> {
             validate_email(to)?;
             Ok(())
         }
+        // SMS: Otp, Custom, or an SMS template from the panel by name.
+        (Channel::Sms, _, _) => crate::sms::verify(input),
         _ => Err(CatzError::Validation(
             "Unsupported channel/message_type/template combination".into(),
         )),

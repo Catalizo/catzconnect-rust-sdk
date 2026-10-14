@@ -20,7 +20,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-catzconnect = "1.0.3"
+catzconnect = "1.3"
 tokio   = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -226,3 +226,52 @@ let ok = catzconnect::webhook::verify_signature(&raw_body, signature_header, &se
 
 `verify_signature_at(body, header, secret, now_unix, tolerance_secs)` takes an
 explicit clock. SHA-256 and HMAC are built in; no extra dependency.
+
+## SMS
+
+`to` is an E.164 number (`+` and the country code; spaces, dashes, dots and
+brackets are removed). `identity` is ignored — use `String::new()`.
+`CatzConnect::send_sms` returns `SmsSendResult { message_id, segments, encoding }`.
+
+```rust
+// One-time code: Verification + Otp (up to 15 letters or digits).
+let sent = CatzConnect::send_sms(SendInput {
+    message_type: MessageType::Verification,
+    channel:      Channel::Sms,
+    template:     Template::Otp,
+    identity:     String::new(),
+    payload: SendPayload {
+        to:  Some("+14155550100".into()),
+        otp: Some("123456".into()),
+        ..Default::default()
+    },
+}, None).await?;
+println!("{} {} {}", sent.message_id, sent.segments, sent.encoding); // … 1 gsm7
+
+// Free text: Transactional or Promotional + Custom. India needs a DLT id.
+CatzConnect::send_sms(SendInput {
+    message_type: MessageType::Promotional,
+    channel:      Channel::Sms,
+    template:     Template::Custom,
+    identity:     String::new(),
+    payload: SendPayload {
+        to:              Some("+91 98765 43210".into()),
+        body:            Some("Sale ends tonight".into()),
+        dlt_template_id: Some("1207161234567890123".into()),
+        gateway:         Some("MSG91 India".into()), // optional: one of the key's gateways
+        sender:          Some("CATZIN".into()),      // optional: only with gateway
+        ..Default::default()
+    },
+}, None).await?;
+
+// An SMS template from the panel: Template::Named("Order shipped".into()) with payload.data.
+```
+
+Validation matches the server: E.164 `to`; `Otp` only with `Verification`,
+`Custom` only with `Transactional`/`Promotional`; `sender` only with `gateway`;
+numeric `dlt_template_id`; Custom bodies at most 10 segments (1,530 GSM-7 /
+670 UCS-2 characters) and a DLT id for +91. `catzconnect::sms::analyse(text)`
+reports the encoding and segments; `sms::normalise_e164` normalises a number.
+
+> 1.3.0 adds `Channel::Sms` and `MessageType::Promotional`. An exhaustive
+> `match` on either enum without a wildcard arm must add the new variant.

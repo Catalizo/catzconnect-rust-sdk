@@ -1,14 +1,14 @@
 //! # CatzConnect SDK (Rust)
 //!
 //! A secure, minimal SDK for sending encrypted communication requests
-//! (e.g., email OTP, Transactional) to the CatzConnect API.
+//! (email, WhatsApp, push and SMS) to the CatzConnect API.
 //!
 //! ## Quick start
 //!
 //! ```toml
 //! # Cargo.toml
 //! [dependencies]
-//! catzconnect = "1.2"
+//! catzconnect = "1.3"
 //! tokio   = { version = "1", features = ["full"] }
 //! dotenvy = "0.15"
 //! ```
@@ -65,6 +65,7 @@
 //! ```
 
 pub mod error;
+pub mod sms;
 pub mod types;
 pub mod webhook;
 
@@ -84,6 +85,7 @@ use types::{
     Template,
     SendInput,
     EnvValues,
+    SmsSendResult,
 };
 
 pub struct CatzConnect;
@@ -175,6 +177,8 @@ impl CatzConnect {
                 "data":         input.payload.data,
             }),
 
+            (Channel::Sms, _, _) => sms::build_payload(&input),
+
             _ => {
                 return Err(CatzError::Validation(
                     "Unsupported channel/message_type/template combination".into(),
@@ -190,6 +194,40 @@ impl CatzConnect {
         let response = client.post("/sdk/send", &encrypted).await?;
 
         Ok(response)
+    }
+
+    /// Sends an SMS (`input.channel` must be [`Channel::Sms`]) and returns the
+    /// queued message's id, segments and encoding.
+    ///
+    /// ```rust,no_run
+    /// use catzconnect::{CatzConnect, types::{Channel, MessageType, SendInput, SendPayload, Template}};
+    ///
+    /// # async fn run() -> Result<(), catzconnect::CatzError> {
+    /// let sent = CatzConnect::send_sms(SendInput {
+    ///     message_type: MessageType::Verification,
+    ///     channel:      Channel::Sms,
+    ///     template:     Template::Otp,
+    ///     identity:     String::new(), // ignored for SMS
+    ///     payload: SendPayload {
+    ///         to:  Some("+14155550100".into()),
+    ///         otp: Some("123456".into()),
+    ///         ..Default::default()
+    ///     },
+    /// }, None).await?;
+    /// println!("{} ({} segment(s), {})", sent.message_id, sent.segments, sent.encoding);
+    /// # Ok(()) }
+    /// ```
+    pub async fn send_sms(input: SendInput, env: Option<EnvValues>) -> Result<SmsSendResult, CatzError> {
+        if !matches!(input.channel, Channel::Sms) {
+            return Err(CatzError::Validation(format!(
+                "send_sms is for the SMS channel, not {}",
+                input.channel.name()
+            )));
+        }
+        let response = Self::send(input, env).await?;
+        SmsSendResult::from_response(&response).ok_or_else(|| {
+            CatzError::Validation(format!("Unexpected SMS response: {response}"))
+        })
     }
 }
 /// Cross-language interop with the Go SDK. Runs only with CATZ_INTEROP_DIR set:

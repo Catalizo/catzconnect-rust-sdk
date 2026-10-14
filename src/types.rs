@@ -5,6 +5,8 @@ pub enum MessageType {
     Verification,
     Transactional,
     Notification,
+    /// SMS only.
+    Promotional,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +14,21 @@ pub enum Channel {
     Email,
     WhatsApp,
     Push,
+    /// Sent to the API as `"SMS"`.
+    #[serde(rename = "SMS")]
+    Sms,
+}
+
+impl Channel {
+    /// The name sent to the API.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Channel::Email => "Email",
+            Channel::WhatsApp => "WhatsApp",
+            Channel::Push => "Push",
+            Channel::Sms => "SMS",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,8 +36,9 @@ pub enum Template {
     Otp,
     Custom,
     Notification,
-    /// An email template created in the panel (Email → Templates), sent by
-    /// name. Its `{{variables}}` are filled from `payload.data`.
+    /// A template created in the panel (Email → Templates, or an SMS
+    /// template on the SMS channel), sent by name. Its `{{variables}}` are
+    /// filled from `payload.data`.
     Named(String),
 }
 
@@ -41,6 +59,7 @@ pub struct SendInput {
     pub message_type: MessageType,
     pub channel: Channel,
     pub template: Template,
+    /// The sender identity. Ignored by the SMS channel (use `String::new()`).
     pub identity: String,
     pub payload: SendPayload,
 }
@@ -53,8 +72,9 @@ pub struct SendInput {
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct SendPayload {
-    /// Email address (Email), phone number with country code (WhatsApp), or
-    /// FCM registration token (Push).
+    /// Email address (Email), phone number with country code (WhatsApp),
+    /// FCM registration token (Push), or an E.164 number such as
+    /// `+919876543210` (SMS).
     pub to: Option<String>,
     pub otp: Option<String>,
     /// Required for Email. Optional for WhatsApp, where it is a bold first line.
@@ -63,7 +83,7 @@ pub struct SendPayload {
 
     // ── Push only ──
     pub title: Option<String>,
-    /// Push: delivered to the app (string values only). Email with
+    /// Push: delivered to the app (string values only). Email or SMS with
     /// `Template::Named`: the values for the template's `{{variables}}`.
     pub data: Option<std::collections::HashMap<String, String>>,
     /// https URL.
@@ -78,6 +98,38 @@ pub struct SendPayload {
     /// or `external_user_id`; `device_key` is not allowed with it, because
     /// each registered device's own key is used.
     pub external_user_id: Option<String>,
+
+    // ── SMS only ──
+    /// Send through this gateway (its id or label) instead of routing. It
+    /// must be one of the API key's SMS gateways.
+    pub gateway: Option<String>,
+    /// Sender override: an E.164 number or a 2–11 character sender ID. Only
+    /// together with `gateway`, and only when that gateway allows it.
+    pub sender: Option<String>,
+    /// India DLT content template id (digits) for Custom bodies and the
+    /// default OTP text. Required for +91 numbers unless the panel template
+    /// carries one.
+    pub dlt_template_id: Option<String>,
+}
+
+/// The `data` of a successful SMS send. The message is queued, not yet
+/// delivered; webhook events (`sms.sent`, `sms.delivered`, `sms.failed`,
+/// `sms.unknown` — the provider was called but did not answer, so it is not
+/// resent) carry `message_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SmsSendResult {
+    pub message_id: String,
+    /// Billable parts.
+    pub segments: u32,
+    /// `"gsm7"` or `"ucs2"`.
+    pub encoding: String,
+}
+
+impl SmsSendResult {
+    /// Reads `data` out of the server's `{success, message, data}` answer.
+    pub fn from_response(response: &serde_json::Value) -> Option<Self> {
+        serde_json::from_value(response.get("data")?.clone()).ok()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
