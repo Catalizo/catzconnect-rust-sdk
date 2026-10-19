@@ -1,14 +1,15 @@
 //! # CatzConnect SDK (Rust)
 //!
 //! A secure, minimal SDK for sending encrypted communication requests
-//! (email, WhatsApp, push and SMS) to the CatzConnect API.
+//! (email, WhatsApp, push, SMS and phone calls) to the CatzConnect API, and
+//! for Voice & Video calls ([`CatzConnect::calls`]).
 //!
 //! ## Quick start
 //!
 //! ```toml
 //! # Cargo.toml
 //! [dependencies]
-//! catzconnect = "1.3"
+//! catzconnect = "1.5"
 //! tokio   = { version = "1", features = ["full"] }
 //! dotenvy = "0.15"
 //! ```
@@ -64,8 +65,11 @@
 //! }
 //! ```
 
+pub mod calls;
 pub mod error;
+pub mod language;
 pub mod sms;
+pub mod voice;
 pub mod types;
 pub mod webhook;
 
@@ -86,11 +90,52 @@ use types::{
     SendInput,
     EnvValues,
     SmsSendResult,
+    VoiceSendResult,
 };
 
 pub struct CatzConnect;
 
 impl CatzConnect {
+    /// Voice & Video calls (create, token, get, end), with credentials from
+    /// the environment. See [`calls::Calls`].
+    ///
+    /// ```rust,no_run
+    /// use catzconnect::{CatzConnect, calls::{CallMode, CreateCallInput}};
+    /// # async fn run() -> Result<(), catzconnect::CatzError> {
+    /// let call = CatzConnect::calls().create(CreateCallInput {
+    ///     mode: CallMode::Video,
+    ///     from: "alice".into(),
+    ///     to:   vec!["bob".into()],
+    ///     ..Default::default()
+    /// }).await?;
+    /// let token = CatzConnect::calls().token("alice", None).await?;
+    /// println!("{} {}", call.id, token.ws_url);
+    /// # Ok(()) }
+    /// ```
+    pub fn calls() -> calls::Calls {
+        calls::Calls::new(None)
+    }
+
+    /// [`CatzConnect::calls`] with explicit credentials.
+    pub fn calls_with(env: EnvValues) -> calls::Calls {
+        calls::Calls::new(Some(env))
+    }
+
+    /// Places a phone call (`input.channel` must be [`Channel::Voice`]) and
+    /// returns the queued call's id.
+    pub async fn send_voice(input: SendInput, env: Option<EnvValues>) -> Result<VoiceSendResult, CatzError> {
+        if !matches!(input.channel, Channel::Voice) {
+            return Err(CatzError::Validation(format!(
+                "send_voice is for the Voice channel, not {}",
+                input.channel.name()
+            )));
+        }
+        let response = Self::send(input, env).await?;
+        VoiceSendResult::from_response(&response).ok_or_else(|| {
+            CatzError::Validation(format!("Unexpected Voice response: {response}"))
+        })
+    }
+
     /// Validates, encrypts, and sends `input` to the CatzConnect API.
     ///
     /// Reads from the environment (or a `.env` file loaded via `dotenvy`):
@@ -104,13 +149,35 @@ impl CatzConnect {
     /// Returns [`CatzError`] on validation failure, encryption failure, or a
     /// non-2xx HTTP response from the API.
     pub async fn send(input: SendInput, env: Option<EnvValues>) -> Result<serde_json::Value, CatzError> {
+        // 1–2. Validate and build
+        let final_payload = Self::build_payload(&input)?;
+
+        // 3. Encrypt
+        let encrypted = crypto::encrypt(&final_payload, env.clone())?;
+
+        // 4. Send
+        let client = HttpClient::from_env(env)?;
+        let response = client.post("/sdk/send", &encrypted).await?;
+
+        Ok(response)
+    }
+
+    /// The JSON body (before encryption) that [`CatzConnect::send`] posts
+    /// for `input`, after validating it. `payload.language`, when set, is
+    /// normalised (`"de-DE"` → `"de"`) and added at the top level; without
+    /// it the body is exactly what earlier versions sent.
+    pub fn build_payload(input: &SendInput) -> Result<serde_json::Value, CatzError> {
         // 1. Validate
-        verify_payload(&input)?;
+        verify_payload(input)?;
+        let language = match input.payload.language.as_deref() {
+            Some(l) => Some(language::normalize_language(l)?),
+            None => None,
+        };
 
         // 2. Build flat payload mirroring the TypeScript finalPayload spread:
         //    { message_type, channel, template, ...payload }
         //    serde_json preserve_order feature → IndexMap → insertion order matches JS
-        let final_payload = match (
+        let mut final_payload = match (
             &input.channel,
             &input.message_type,
             &input.template,
@@ -179,6 +246,8 @@ impl CatzConnect {
 
             (Channel::Sms, _, _) => sms::build_payload(&input),
 
+            (Channel::Voice, _, _) => voice::build_payload(&input),
+
             _ => {
                 return Err(CatzError::Validation(
                     "Unsupported channel/message_type/template combination".into(),
@@ -186,14 +255,11 @@ impl CatzConnect {
             }
         };
 
-        // 3. Encrypt
-        let encrypted = crypto::encrypt(&final_payload, env.clone())?;
+        if let (Some(lang), Some(obj)) = (language, final_payload.as_object_mut()) {
+            obj.insert("language".into(), serde_json::Value::String(lang.into()));
+        }
 
-        // 4. Send
-        let client = HttpClient::from_env(env)?;
-        let response = client.post("/sdk/send", &encrypted).await?;
-
-        Ok(response)
+        Ok(final_payload)
     }
 
     /// Sends an SMS (`input.channel` must be [`Channel::Sms`]) and returns the
@@ -230,6 +296,55 @@ impl CatzConnect {
         })
     }
 }
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use types::SendPayload;
+
+    fn otp(channel: Channel, to: &str, language: Option<&str>) -> SendInput {
+        SendInput {
+            message_type: MessageType::Verification,
+            channel,
+            template: Template::Otp,
+            identity: "a@b.co".into(),
+            payload: SendPayload {
+                to: Some(to.into()),
+                otp: Some("123456".into()),
+                language: language.map(Into::into),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn language_is_omitted_when_unset_and_normalised_when_set() {
+        let p = CatzConnect::build_payload(&otp(Channel::Email, "u@x.co", None)).unwrap();
+        assert!(p.get("language").is_none(), "{p}");
+        let p = CatzConnect::build_payload(&otp(Channel::Email, "u@x.co", Some("de-DE"))).unwrap();
+        assert_eq!(p["language"], "de");
+        assert_eq!(p["channel"], "Email");
+        let p = CatzConnect::build_payload(&otp(Channel::Sms, "+14155550100", Some("HI"))).unwrap();
+        assert_eq!(p["language"], "hi");
+        let p = CatzConnect::build_payload(&otp(Channel::WhatsApp, "+919876543210", Some("ar"))).unwrap();
+        assert_eq!(p["language"], "ar");
+    }
+
+    #[test]
+    fn voice_keeps_data_language_next_to_language() {
+        let mut input = otp(Channel::Voice, "+14155550100", Some("ja-JP"));
+        input.payload.data = Some([("language".to_string(), "en-US".to_string())].into());
+        let p = CatzConnect::build_payload(&input).unwrap();
+        assert_eq!(p["language"], "ja");
+        assert_eq!(p["data"]["language"], "en-US");
+    }
+
+    #[test]
+    fn unsupported_language_is_a_validation_error() {
+        let err = CatzConnect::build_payload(&otp(Channel::Email, "u@x.co", Some("fr-FR"))).unwrap_err();
+        assert!(matches!(err, CatzError::Validation(ref m) if m.contains("\"fr-FR\"") && m.contains("en, de, ja, ar, hi")), "{err}");
+    }
+}
+
 /// Cross-language interop with the Go SDK. Runs only with CATZ_INTEROP_DIR set:
 /// writes a Rust-encrypted fixture for Go to open, and opens Go's if present.
 #[cfg(test)]

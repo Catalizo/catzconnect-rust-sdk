@@ -17,6 +17,25 @@ pub enum Channel {
     /// Sent to the API as `"SMS"`.
     #[serde(rename = "SMS")]
     Sms,
+    /// A phone call that speaks the message (text-to-speech). `"voice"`
+    /// parses too (see [`std::str::FromStr`]).
+    Voice,
+}
+
+impl std::str::FromStr for Channel {
+    type Err = crate::error::CatzError;
+
+    /// Case-insensitive: `"voice"`, `"Voice"`, `"sms"`, `"email"`, …
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "email" => Ok(Channel::Email),
+            "whatsapp" => Ok(Channel::WhatsApp),
+            "push" => Ok(Channel::Push),
+            "sms" => Ok(Channel::Sms),
+            "voice" => Ok(Channel::Voice),
+            _ => Err(crate::error::CatzError::Validation(format!("Unknown channel '{s}'"))),
+        }
+    }
 }
 
 impl Channel {
@@ -27,6 +46,7 @@ impl Channel {
             Channel::WhatsApp => "WhatsApp",
             Channel::Push => "Push",
             Channel::Sms => "SMS",
+            Channel::Voice => "Voice",
         }
     }
 }
@@ -74,9 +94,17 @@ pub struct SendInput {
 pub struct SendPayload {
     /// Email address (Email), phone number with country code (WhatsApp),
     /// FCM registration token (Push), or an E.164 number such as
-    /// `+919876543210` (SMS).
+    /// `+919876543210` (SMS, Voice).
     pub to: Option<String>,
     pub otp: Option<String>,
+    /// Language of the built-in (default) Otp/Verification templates: `en`,
+    /// `de`, `ja`, `ar` or `hi`. A BCP-47 tag such as `"de-DE"` is accepted
+    /// and sent as `"de"`. Sent at the top level of the request, next to
+    /// `channel`/`template`; `None` leaves it out (server default: English).
+    /// Panel templates are not affected; for Voice, `data["language"]` still
+    /// overrides the spoken language; WhatsApp needs the Authentication
+    /// template approved in that language. All channels.
+    pub language: Option<String>,
     /// Required for Email. Optional for WhatsApp, where it is a bold first line.
     pub subject: Option<String>,
     pub body: Option<String>,
@@ -110,6 +138,13 @@ pub struct SendPayload {
     /// default OTP text. Required for +91 numbers unless the panel template
     /// carries one.
     pub dlt_template_id: Option<String>,
+
+    // ── Voice only ──
+    /// Call through this phone provider (its id or label) instead of
+    /// routing. It must be one of the API key's call providers. Voice
+    /// options go in `data`: `language` (e.g. `en-US`), `voice` (`female`,
+    /// `male` or a provider voice name) and `repeat` (`"1"`–`"3"`).
+    pub provider: Option<String>,
 }
 
 /// The `data` of a successful SMS send. The message is queued, not yet
@@ -126,6 +161,20 @@ pub struct SmsSendResult {
 }
 
 impl SmsSendResult {
+    /// Reads `data` out of the server's `{success, message, data}` answer.
+    pub fn from_response(response: &serde_json::Value) -> Option<Self> {
+        serde_json::from_value(response.get("data")?.clone()).ok()
+    }
+}
+
+/// The `data` of a successful Voice send: the phone call is queued, not yet
+/// placed. `voice.*` webhook events carry `message_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceSendResult {
+    pub message_id: String,
+}
+
+impl VoiceSendResult {
     /// Reads `data` out of the server's `{success, message, data}` answer.
     pub fn from_response(response: &serde_json::Value) -> Option<Self> {
         serde_json::from_value(response.get("data")?.clone()).ok()

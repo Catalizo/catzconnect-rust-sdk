@@ -60,15 +60,16 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-pub fn encrypt(payload: &Value, env: Option<EnvValues>) -> Result<EncryptedBody, CatzError> {
-    let priv_b64 = match &env {
+/// X25519 → BLAKE2b-256 → BLAKE2b-256(master ‖ label): the key the server derives.
+fn derive_key(env: &Option<EnvValues>) -> Result<[u8; 32], CatzError> {
+    let priv_b64 = match env {
         Some(e) => e.private_key.clone(),
         None => {
             std::env::var("CATZCONNECT_PRIVATE_KEY").map_err(|_| CatzError::MissingEnv("PRIVATE_KEY".into()))?
         }
     };
 
-    let pub_b64 = match &env {
+    let pub_b64 = match env {
         Some(e) => e.server_public_key.clone(),
         None => std::env::var("CATZCONNECT_SERVER_PUBLIC_KEY")
             .map_err(|_| CatzError::MissingEnv("SERVER_PUBLIC_KEY".into()))?,
@@ -94,7 +95,11 @@ pub fn encrypt(payload: &Value, env: Option<EnvValues>) -> Result<EncryptedBody,
     let mut km = Vec::with_capacity(32 + LABEL.len());
     km.extend_from_slice(&master);
     km.extend_from_slice(LABEL);
-    let key_enc = blake2b_32(&km);
+    Ok(blake2b_32(&km))
+}
+
+pub fn encrypt(payload: &Value, env: Option<EnvValues>) -> Result<EncryptedBody, CatzError> {
+    let key_enc = derive_key(&env)?;
 
     let mut fp = payload.clone();
     if let Some(obj) = fp.as_object_mut() {
@@ -117,4 +122,46 @@ pub fn encrypt(payload: &Value, env: Option<EnvValues>) -> Result<EncryptedBody,
         nonce: STANDARD.encode(nonce_bytes),
         ciphertext: STANDARD.encode(ciphertext),
     })
+}
+
+fn sealed(v: &Value) -> Option<(&str, &str)> {
+    let m = v.as_object()?;
+    if m.len() != 2 {
+        return None;
+    }
+    Some((m.get("nonce")?.as_str()?, m.get("ciphertext")?.as_str()?))
+}
+
+/// Opens an encrypted `{nonce, ciphertext}` envelope — at the top level or as
+/// `data` — with the request key, merging the decrypted object in. Plain
+/// JSON (what `/sdk/*` returns today) is returned unchanged.
+pub fn open_response(res: Value, env: &Option<EnvValues>) -> Result<Value, CatzError> {
+    let top = sealed(&res).is_some();
+    let (nonce_b64, ct_b64) = match sealed(&res).or_else(|| res.get("data").and_then(sealed)) {
+        Some((n, c)) => (n.to_string(), c.to_string()),
+        None => return Ok(res),
+    };
+    let key = derive_key(env)?;
+    let nonce = b64_decode(&nonce_b64)?;
+    if nonce.len() != 12 {
+        return Err(CatzError::EncryptionFailed);
+    }
+    let cipher = ChaCha20Poly1305::new_from_slice(&key).map_err(|_| CatzError::EncryptionFailed)?;
+    let plain = cipher
+        .decrypt(Nonce::from_slice(&nonce), b64_decode(&ct_b64)?.as_ref())
+        .map_err(|_| CatzError::Validation("The response is encrypted with a key this SDK cannot open".into()))?;
+    let opened: Value = serde_json::from_slice(&plain)?;
+    if top {
+        return Ok(if opened.is_object() { opened } else { json!({ "data": opened }) });
+    }
+    let mut out = res;
+    if let (Some(o), Some(m)) = (out.as_object_mut(), opened.as_object()) {
+        for (k, v) in m {
+            o.insert(k.clone(), v.clone());
+        }
+    }
+    if let Some(o) = out.as_object_mut() {
+        o.insert("data".into(), opened);
+    }
+    Ok(out)
 }

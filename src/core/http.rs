@@ -14,6 +14,12 @@ pub struct HttpClient {
 
 impl HttpClient {
     pub fn from_env(env: Option<EnvValues>) -> Result<Self, CatzError> {
+        Self::with_base_url(env, None)
+    }
+
+    /// Like [`HttpClient::from_env`], with an explicit base URL that wins over
+    /// `CATZCONNECT_BASE_URL`.
+    pub fn with_base_url(env: Option<EnvValues>, base_url: Option<String>) -> Result<Self, CatzError> {
         let raw_key = match &env {
             Some(e) => e.api_key.clone(),
             None => std::env::var("CATZCONNECT_API_KEY")
@@ -25,9 +31,11 @@ impl HttpClient {
             return Err(CatzError::MissingEnv("API_KEY is empty".into()));
         }
 
-        let base_url = std::env::var("CATZCONNECT_BASE_URL")
+        let base_url = base_url
+            .or_else(|| std::env::var("CATZCONNECT_BASE_URL").ok())
             .map(|s| s.trim().trim_end_matches('/').to_string())
-            .unwrap_or_else(|_| "https://api.catzconnect.com".into());
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "https://api.catzconnect.com".into());
 
         let connector = HttpsConnector::new();
         let inner = Client::builder().build(connector);
@@ -44,7 +52,7 @@ impl HttpClient {
             .header("Content-Type", "application/json")
             .header("Content-Length", content_length)
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("User-Agent", "catzconnect-rust-sdk/1.0.0")
+            .header("User-Agent", concat!("catzconnect-rust-sdk/", env!("CARGO_PKG_VERSION")))
             .header("Accept", "application/json")
             .body(Body::from(json_body))
             .map_err(|e| CatzError::Http(e.to_string()))?;
