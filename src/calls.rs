@@ -269,11 +269,21 @@ fn decode_call(res: &Value) -> Result<Call, CatzError> {
 pub struct Calls {
     env: Option<EnvValues>,
     base_url: Option<String>,
+    allow_insecure_http: bool,
 }
 
 impl Calls {
     pub fn new(env: Option<EnvValues>) -> Self {
-        Self { env, base_url: None }
+        Self { env, base_url: None, allow_insecure_http: false }
+    }
+
+    /// Accept a plain `http://` base URL to a host other than localhost,
+    /// 127.0.0.1, ::1 or 10.0.2.2 (also `CATZCONNECT_ALLOW_INSECURE_HTTP=1`).
+    /// Default false: such a URL fails with [`CatzError::Validation`]
+    /// before anything is sent.
+    pub fn allow_insecure_http(mut self, allow: bool) -> Self {
+        self.allow_insecure_http = allow;
+        self
     }
 
     /// Overrides `CATZCONNECT_BASE_URL` for these calls (staging, tests).
@@ -284,7 +294,7 @@ impl Calls {
 
     async fn post(&self, path: &str, payload: Value) -> Result<Value, CatzError> {
         let encrypted = crypto::encrypt(&payload, self.env.clone())?;
-        let client = HttpClient::with_base_url(self.env.clone(), self.base_url.clone())?;
+        let client = HttpClient::with_options(self.env.clone(), self.base_url.clone(), self.allow_insecure_http)?;
         let res = client.post(path, &encrypted).await?;
         let res = crypto::open_response(res, &self.env)?;
         if res.get("success").and_then(Value::as_bool) == Some(false) {
@@ -493,6 +503,47 @@ mod tests {
         assert_eq!(server_open(&k, &seen[1].body)["call_id"], "c1");
         assert_eq!(server_open(&k, &seen[2].body)["ttl_seconds"], 600);
         assert_eq!(server_open(&k, &seen[3].body)["reason"], "done");
+    }
+
+    fn otp_input() -> crate::types::SendInput {
+        use crate::types::{Channel, MessageType, SendInput, SendPayload, Template};
+        SendInput {
+            message_type: MessageType::Verification,
+            channel: Channel::Email,
+            template: Template::Otp,
+            identity: "a@b.co".into(),
+            payload: SendPayload { to: Some("u@x.co".into()), otp: Some("123456".into()), ..Default::default() },
+        }
+    }
+
+    #[tokio::test]
+    async fn send_with_options_takes_the_base_url_and_the_http_opt_in() {
+        let k = keys();
+        // A plain-http remote base URL is refused before anything is sent…
+        let err = crate::CatzConnect::send_with_options(
+            otp_input(),
+            Some(k.env.clone()),
+            crate::SendOptions::default().with_base_url("http://api.example.com"),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, CatzError::Validation(ref m) if m.contains("plain http://")), "{err}");
+
+        // …and the per-call base URL is the one used.
+        let (url, seen) = mock(|_| (200, json!({"success":true,"message":"queued","data":{"id":"m1"}}))).await;
+        let out = crate::CatzConnect::send_with_options(
+            otp_input(),
+            Some(k.env.clone()),
+            crate::SendOptions::default().with_base_url(url).allow_insecure_http(true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["success"], true);
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen[0].path, "/sdk/send");
+        let b = server_open(&k, &seen[0].body);
+        assert_eq!(b["otp"], "123456");
+        assert!(b["ts"].is_number());
     }
 
     #[test]

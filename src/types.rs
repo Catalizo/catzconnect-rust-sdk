@@ -1,5 +1,18 @@
 use serde::{Deserialize, Serialize};
 
+/// Push: send to many devices or later. `broadcast` / `topic` leave `to`
+/// and `external_user_id` empty; `send_at` (RFC 3339 with a zone, up to 30
+/// days ahead) also works with `to` or `external_user_id`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PushOptions {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub broadcast: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageType {
     Verification,
@@ -147,6 +160,88 @@ pub struct SendPayload {
     pub provider: Option<String>,
 }
 
+/// Per-message options added in 2.0.0, passed next to [`SendInput`] with
+/// [`crate::CatzConnect::send_with_extras`] (or `send_full`). Kept out of
+/// [`SendPayload`] so `SendPayload { … }` literals written for 1.6 still
+/// compile. `#[non_exhaustive]`: build it with the methods, which also keeps
+/// later additions from breaking your code.
+///
+/// ```
+/// use catzconnect::types::{PushOptions, SendExtras};
+/// let x = SendExtras::new().idempotency_key("order-42").reference("order 42");
+/// let p = SendExtras::new().push(PushOptions { broadcast: true, ..Default::default() });
+/// assert_eq!(x.idempotency_key.as_deref(), Some("order-42"));
+/// assert!(p.push.unwrap().broadcast);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
+pub struct SendExtras {
+    // ── WhatsApp ──
+    /// Approved-template parameters (`Template::Named` = the Meta template
+    /// name) or a media message (`Template::Custom` with `media`).
+    pub whatsapp: Option<crate::whatsapp::WhatsAppOptions>,
+
+    // ── Email ──
+    /// Open / click tracking for this message.
+    pub tracking: Option<crate::whatsapp::TrackingOverride>,
+    /// A subscription topic key of your organization (Email → Preferences
+    /// in the panel): its opt-outs apply and the message's unsubscribe link
+    /// unsubscribes from that topic only.
+    pub topic: Option<String>,
+
+    // ── Push ──
+    /// Broadcast to every device, a topic, or a scheduled send. The answer's
+    /// `data` then has `broadcast_id`, `audience`, `status: "scheduled"`,
+    /// `send_at`; follow it with [`crate::devapi::PushApi`]. Server keys only.
+    pub push: Option<PushOptions>,
+
+    // ── Every channel ──
+    /// Retry-safe sends: the same key with the same request within 24 hours
+    /// returns the first answer instead of sending again (sent as the
+    /// `Idempotency-Key` header and the `idempotency_key` field). 1–255
+    /// visible ASCII characters.
+    pub idempotency_key: Option<String>,
+    /// Your own id for the message (≤ 128 chars), to find it again with
+    /// [`crate::devapi::Messages::list`].
+    pub reference: Option<String>,
+}
+
+impl SendExtras {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn whatsapp(mut self, w: crate::whatsapp::WhatsAppOptions) -> Self {
+        self.whatsapp = Some(w);
+        self
+    }
+
+    pub fn tracking(mut self, t: crate::whatsapp::TrackingOverride) -> Self {
+        self.tracking = Some(t);
+        self
+    }
+
+    pub fn topic(mut self, t: impl Into<String>) -> Self {
+        self.topic = Some(t.into());
+        self
+    }
+
+    pub fn push(mut self, p: PushOptions) -> Self {
+        self.push = Some(p);
+        self
+    }
+
+    pub fn idempotency_key(mut self, k: impl Into<String>) -> Self {
+        self.idempotency_key = Some(k.into());
+        self
+    }
+
+    pub fn reference(mut self, r: impl Into<String>) -> Self {
+        self.reference = Some(r.into());
+        self
+    }
+}
+
 /// The `data` of a successful SMS send. The message is queued, not yet
 /// delivered; webhook events (`sms.sent`, `sms.delivered`, `sms.failed`,
 /// `sms.unknown` — the provider was called but did not answer, so it is not
@@ -192,9 +287,48 @@ pub struct ApiResponse {
     pub status: String,
 }
 
-#[derive(Debug, Clone)]
+/// Explicit credentials. `{:?}` never prints the API key or the private key.
+#[derive(Clone)]
 pub struct EnvValues {
     pub api_key: String,
     pub private_key: String,
     pub server_public_key: String,
+}
+
+/// The first 4 characters of a long secret and its length, never the secret.
+fn redact_secret(s: &str) -> String {
+    if s.is_empty() {
+        return "[empty]".into();
+    }
+    let prefix: String = if s.chars().count() > 8 { s.chars().take(4).collect() } else { String::new() };
+    format!("{prefix}…[redacted, {} chars]", s.chars().count())
+}
+
+impl std::fmt::Debug for EnvValues {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnvValues")
+            .field("api_key", &redact_secret(&self.api_key))
+            .field("private_key", &"[redacted]")
+            .field("server_public_key", &self.server_public_key)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod env_values_tests {
+    use super::EnvValues;
+
+    #[test]
+    fn debug_redacts_secrets() {
+        let e = EnvValues {
+            api_key: "live_abcdefghijklmnopqrstuvwxyz".into(),
+            private_key: "PRIVATEKEYSECRET==".into(),
+            server_public_key: "SERVERPUB==".into(),
+        };
+        for s in [format!("{e:?}"), format!("{e:#?}"), format!("{:?}", Some(e.clone()))] {
+            assert!(!s.contains("abcdefghijklmnopqrstuvwxyz"), "{s}");
+            assert!(!s.contains("PRIVATEKEYSECRET"), "{s}");
+            assert!(s.contains("SERVERPUB=="), "{s}");
+        }
+    }
 }

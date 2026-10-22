@@ -20,7 +20,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-catzconnect = "1.5"
+catzconnect = "2"
 tokio   = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -38,6 +38,16 @@ CATZCONNECT_SERVER_PUBLIC_KEY=server_base64_public_key
 ```
 
 > ⚠️ Never expose these values in public environments.
+
+`CATZCONNECT_BASE_URL` (optional, default `https://api.catzconnect.com`) must be
+`https://`. Plain `http://` is accepted only for `localhost`, `127.0.0.1`,
+`[::1]` and `10.0.2.2` (local development); any other `http://` URL fails with
+`CatzError::Validation` before anything is sent, since the API key would travel
+unencrypted. To allow it anyway set `CATZCONNECT_ALLOW_INSECURE_HTTP=1` (or, for
+the calls API, `CatzConnect::calls().allow_insecure_http(true)`).
+
+`format!("{:?}", env)` on an `EnvValues` never prints the API key or the private
+key.
 
 ---
 
@@ -439,9 +449,57 @@ Twilio Video, LiveKit, …), the browser client emits `provider` with
 `{ name, room, token, app_id?, url?, extra? }` instead of opening peer
 connections; join with that provider's own SDK.
 
+> 2.0.0 adds `CatzConnect::send_with_options` (`SendOptions`: per-call base
+> URL and the plain-`http://` opt-in for the send path), refuses a
+> plain-`http://` base URL to a non-local host (see *Environment Setup*) and
+> redacts `EnvValues`' `Debug` output.
+>
 > 1.5.0 adds `SendPayload::language` (and `CatzConnect::build_payload`); a
 > `SendPayload { … }` literal without `..Default::default()` must add it.
 >
 > 1.4.0 adds `Channel::Voice` and `SendPayload::provider`. An exhaustive
 > `match` on `Channel` without a wildcard arm must add the new variant;
 > build `SendPayload` with `..Default::default()`.
+
+## Message status, retry-safe sends, test keys, hosted OTP (2.0.0)
+
+The 2.0.0 per-message options are a separate `types::SendExtras` (built
+with its methods), passed with `CatzConnect::send_with_extras` (or
+`send_full`, with `SendOptions` too). `SendPayload` is unchanged from 1.5, so
+existing `SendPayload { … }` literals keep compiling.
+
+```rust,ignore
+use catzconnect::devapi::{Messages, Otp, OtpStartInput, OtpVerifyInput};
+use catzconnect::types::SendExtras;
+let payload = SendPayload { to: Some("+919876543210".into()), body: Some("Shipped".into()), ..Default::default() };
+let extras = SendExtras::new().idempotency_key("ship-42").reference("order-42");
+CatzConnect::send_with_extras(SendInput { payload, ..input }, extras, None).await?;
+let m = Messages::new(None).get(&message_id).await?;             // status + events
+let s = Otp::new(None).start(OtpStartInput { channel: "SMS".into(), to: "+919876543210".into(), ..Default::default() }).await?;
+let v = Otp::new(None).verify(OtpVerifyInput { verification_id: Some(id), code: typed, ..Default::default() }).await;
+if let Err(e) = &v { if e.api_code().as_deref() == Some(catzconnect::devapi::codes::OTP_INVALID) { /* e.api_details() */ } }
+```
+
+WhatsApp approved templates: `Template::Named("order_update".into())` with
+`SendExtras::new().whatsapp(…)`; media: `Template::Custom` + `media`. Test keys are
+validated but never delivered or billed. Management API: `devapi::Manage::new(None).call("keys", "create", json!({...}))`.
+Webhooks: `webhook::parse_event(body, header, secret)` (`.test`).
+
+## Email topics, push broadcasts and topics (2.0.0)
+
+```rust
+use catzconnect::devapi::{PushApi, PushTopicChange};
+use catzconnect::types::{PushOptions, SendExtras};
+
+// Push to a topic, later (server key); data.broadcast_id comes back.
+let payload = SendPayload { body: Some("Today only".into()), ..Default::default() };
+let extras = SendExtras::new()
+    .push(PushOptions { topic: Some("deals".into()), send_at: Some("2026-11-02T09:00:00Z".into()), ..Default::default() });
+// Email: SendExtras::new().topic("newsletter") — its opt-outs apply.
+let push = PushApi::new(None);
+push.subscribe(PushTopicChange { identity: "my-firebase".into(), topic: "deals".into(), external_user_id: Some("u1".into()), ..Default::default() }).await?;
+```
+
+App and test keys are refused for broadcasts / topics. `webhook::EVENTS`
+includes `email.complained`, `email.unsubscribed`, `push.opened`,
+`sms.inbound`, `sms.opt_out`, `whatsapp.opt_out`.

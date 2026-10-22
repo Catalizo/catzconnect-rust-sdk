@@ -43,6 +43,13 @@ impl CatzError {
         self.api_json()?.get("message")?.as_str().map(str::to_string)
     }
 
+    /// For [`CatzError::ApiError`]: the whole JSON refusal, with extra
+    /// fields such as `attempts_remaining` (otp_invalid) or `retry_after`
+    /// (otp_resend_cooldown).
+    pub fn api_details(&self) -> Option<serde_json::Value> {
+        self.api_json()
+    }
+
     fn api_json(&self) -> Option<serde_json::Value> {
         match self {
             CatzError::ApiError { body, .. } => serde_json::from_str(body).ok(),

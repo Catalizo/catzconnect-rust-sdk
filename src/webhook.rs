@@ -184,6 +184,56 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
+/// Every event a webhook can subscribe to.
+pub const EVENTS: &[&str] = &[
+    "email.sent", "email.failed", "email.bounced", "email.opened", "email.clicked", "email.received",
+    "whatsapp.status", "whatsapp.inbound", "whatsapp.read",
+    "push.sent", "push.failed",
+    "sms.sent", "sms.delivered", "sms.failed", "sms.unknown",
+    "call.ringing", "call.started", "call.ended", "call.missed", "call.declined", "call.canceled", "call.failed",
+    "participant.joined", "participant.left",
+    "voice.answered", "voice.completed", "voice.failed", "voice.unknown",
+    "email.complained", "email.unsubscribed", "push.opened", "sms.inbound", "sms.opt_out", "whatsapp.opt_out",
+];
+
+/// A verified webhook delivery. `test` is true for events of test (sandbox) keys.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WebhookEvent {
+    pub id: String,
+    pub event_type: String,
+    pub created_at: String,
+    pub organization_id: String,
+    pub test: bool,
+    pub data: serde_json::Value,
+}
+
+/// Verify the `Catz-Signature` header and decode the body. `None` when the
+/// signature is wrong / too old or the body is not an event.
+pub fn parse_event(raw_body: &[u8], header: &str, secret: &str) -> Option<WebhookEvent> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    parse_event_at(raw_body, header, secret, now, DEFAULT_TOLERANCE_SECS)
+}
+
+/// [`parse_event`] with an explicit clock and tolerance.
+pub fn parse_event_at(raw_body: &[u8], header: &str, secret: &str, now: u64, tolerance: u64) -> Option<WebhookEvent> {
+    if !verify_signature_at(raw_body, header, secret, now, tolerance) {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(raw_body).ok()?;
+    let s = |k: &str| v.get(k).and_then(serde_json::Value::as_str).map(str::to_string);
+    let data = v.get("data").cloned().unwrap_or(serde_json::Value::Null);
+    let test = v.get("test").and_then(serde_json::Value::as_bool) == Some(true)
+        || data.get("test").and_then(serde_json::Value::as_bool) == Some(true);
+    Some(WebhookEvent {
+        id: s("id")?,
+        event_type: s("type")?,
+        created_at: s("created_at").unwrap_or_default(),
+        organization_id: s("organization_id").unwrap_or_default(),
+        test,
+        data,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +283,22 @@ mod tests {
         assert!(!verify_signature_at(body, HEADER, "whsec_other", 1_700_000_100, 300));
         assert!(!verify_signature_at(body, HEADER, "whsec_test", 1_700_001_000, 300));
         assert!(!verify_signature_at(body, "garbage", "whsec_test", 1_700_000_100, 300));
+    }
+
+    #[test]
+    fn parses_events_and_flags_tests() {
+        let body = br#"{"id":"e1","type":"sms.delivered","created_at":"x","organization_id":"o","test":true,"data":{"message_id":"m"}}"#;
+        let mut signed = b"1700000000.".to_vec();
+        signed.extend_from_slice(body);
+        let header = format!("t=1700000000,v1={}", hex(&hmac_sha256(b"whsec_test", &signed)));
+        let ev = parse_event_at(body, &header, "whsec_test", 1_700_000_000, 300).expect("parsed");
+        assert_eq!(ev.event_type, "sms.delivered");
+        assert!(ev.test);
+        assert_eq!(ev.data["message_id"], "m");
+        assert!(parse_event_at(body, &header, "other", 1_700_000_000, 300).is_none());
+        assert!(EVENTS.contains(&"whatsapp.read"));
+        for e in ["email.complained", "email.unsubscribed", "push.opened", "sms.inbound", "sms.opt_out", "whatsapp.opt_out"] {
+            assert!(EVENTS.contains(&e), "{e}");
+        }
     }
 }
